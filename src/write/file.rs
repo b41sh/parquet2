@@ -128,7 +128,7 @@ impl<W: Write> FileWriter<W> {
     /// Writes the footer of the parquet file. Returns the total size of the file and the
     /// underlying writer.
     pub fn end_ext(
-        mut self,
+        &mut self,
         key_value_metadata: Option<Vec<KeyValue>>,
     ) -> Result<(u64, FileMetaData)> {
         // compute file stats
