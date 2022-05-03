@@ -186,13 +186,12 @@ impl<W: Write> FileWriter<W> {
         );
 
         let len = end_file(&mut self.writer, &metadata)?;
-        Ok(self.offset + len, metadata)
+        Ok((self.offset + len, metadata))
     }
 
     /// Returns the underlying writer.
     pub fn into_inner(self) -> W {
         self.writer
-        Ok((self.offset + len, self.writer, metadata))
     }
 }
 
@@ -222,11 +221,7 @@ mod tests {
 
         // write the file
         start_file(&mut writer)?;
-<<<<<<< HEAD
         end_file(&mut writer, metadata.into_thrift())?;
-=======
-        end_file(&mut writer, &metadata.into_thrift()?)?;
->>>>>>> origin/databend-dev
 
         let a = writer.into_inner();
 
