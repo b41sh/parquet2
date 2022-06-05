@@ -6,9 +6,7 @@ pub(crate) mod page;
 mod row_group;
 pub(self) mod statistics;
 
-#[cfg(feature = "stream")]
 mod stream;
-#[cfg(feature = "stream")]
 pub use stream::FileStreamer;
 
 mod dyn_iter;
@@ -39,6 +37,14 @@ pub struct WriteOptions {
 pub enum Version {
     V1,
     V2,
+}
+
+/// Used to recall the state of the parquet writer - whether sync or async.
+#[derive(PartialEq)]
+enum State {
+    Initialised,
+    Started,
+    Finished,
 }
 
 impl From<Version> for i32 {

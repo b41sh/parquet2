@@ -90,7 +90,6 @@ fn test_column(column: &str, compression: CompressionOptions) -> Result<()> {
     let writer = Cursor::new(vec![]);
     let mut writer = FileWriter::new(writer, schema, options, None);
 
-    writer.start()?;
     writer.write(DynIter::new(columns))?;
     writer.end(None)?;
 
@@ -214,7 +213,6 @@ fn basic() -> Result<()> {
     let writer = Cursor::new(vec![]);
     let mut writer = FileWriter::new(writer, schema, options, None);
 
-    writer.start()?;
     writer.write(DynIter::new(columns))?;
     writer.end(None)?;
 
@@ -233,7 +231,7 @@ fn basic() -> Result<()> {
     Ok(())
 }
 
-async fn test_column_async(column: &str) -> Result<()> {
+async fn test_column_async(column: &str, compression: CompressionOptions) -> Result<()> {
     let array = alltypes_plain(column);
 
     let options = WriteOptions {
@@ -248,6 +246,7 @@ async fn test_column_async(column: &str) -> Result<()> {
         Array::Int96(_) => PhysicalType::Int96,
         Array::Float32(_) => PhysicalType::Float,
         Array::Float64(_) => PhysicalType::Double,
+        Array::Binary(_) => PhysicalType::ByteArray,
         _ => todo!(),
     };
 
@@ -264,7 +263,7 @@ async fn test_column_async(column: &str) -> Result<()> {
             &options,
             &a[0].descriptor,
         ))),
-        CompressionOptions::Uncompressed,
+        compression,
         vec![],
     ));
     let columns = std::iter::once(Ok(pages));
@@ -272,11 +271,10 @@ async fn test_column_async(column: &str) -> Result<()> {
     let writer = futures::io::Cursor::new(vec![]);
     let mut writer = FileStreamer::new(writer, schema, options, None);
 
-    writer.start().await?;
     writer.write(DynIter::new(columns)).await?;
-    let writer = writer.end(None).await?.1;
+    writer.end(None).await?;
 
-    let data = writer.into_inner();
+    let data = writer.into_inner().into_inner();
 
     let (result, statistics) = read_column_async(&mut futures::io::Cursor::new(data)).await?;
     assert_eq!(array, result);
@@ -290,5 +288,5 @@ async fn test_column_async(column: &str) -> Result<()> {
 
 #[tokio::test]
 async fn test_async() -> Result<()> {
-    test_column_async("float_col").await
+    test_column_async("float_col", CompressionOptions::Uncompressed).await
 }

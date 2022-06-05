@@ -7,6 +7,9 @@ use parquet_format_async_temp::{
     FileMetaData, RowGroup,
 };
 
+use crate::write::indexes::{write_column_index_async, write_offset_index_async};
+use crate::write::page::PageWriteSpec;
+use crate::write::State;
 use crate::{
     error::{Error, Result},
     metadata::{KeyValue, SchemaDescriptor},
@@ -52,6 +55,9 @@ pub struct FileStreamer<W: AsyncWrite + Unpin + Send> {
 
     offset: u64,
     row_groups: Vec<RowGroup>,
+    page_specs: Vec<Vec<Vec<PageWriteSpec>>>,
+    /// Used to store the current state for writing the file
+    state: State,
 }
 
 // Accessors
@@ -82,13 +88,25 @@ impl<W: AsyncWrite + Unpin + Send> FileStreamer<W> {
             created_by,
             offset: 0,
             row_groups: vec![],
+            page_specs: vec![],
+            state: State::Initialised,
         }
     }
 
-    /// Writes the header of the file
-    pub async fn start(&mut self) -> Result<()> {
-        self.offset = start_file(&mut self.writer).await? as u64;
-        Ok(())
+    /// Writes the header of the file.
+    ///
+    /// This is automatically called by [`Self::write`] if not called following [`Self::new`].
+    ///
+    /// # Errors
+    /// Returns an error if data has been written to the file.
+    async fn start(&mut self) -> Result<()> {
+        if self.offset == 0 {
+            self.offset = start_file(&mut self.writer).await? as u64;
+            self.state = State::Started;
+            Ok(())
+        } else {
+            Err(Error::General("Start cannot be called twice".to_string()))
+        }
     }
 
     /// Writes a row group to the file.
@@ -98,41 +116,78 @@ impl<W: AsyncWrite + Unpin + Send> FileStreamer<W> {
         E: std::error::Error,
     {
         if self.offset == 0 {
-            return Err(Error::General(
-                "You must call `start` before writing the first row group".to_string(),
-            ));
+            self.start().await?;
         }
-        let (group, _specs, size) = write_row_group_async(
+
+        let ordinal = self.row_groups.len();
+        let (group, specs, size) = write_row_group_async(
             &mut self.writer,
             self.offset,
             self.schema.columns(),
             row_group,
+            ordinal,
         )
         .await?;
         self.offset += size;
         self.row_groups.push(group);
+        self.page_specs.push(specs);
         Ok(())
     }
 
     /// Writes the footer of the parquet file. Returns the total size of the file and the
     /// underlying writer.
-    pub async fn end(mut self, key_value_metadata: Option<Vec<KeyValue>>) -> Result<(u64, W)> {
+    pub async fn end(&mut self, key_value_metadata: Option<Vec<KeyValue>>) -> Result<u64> {
+        if self.offset == 0 {
+            self.start().await?;
+        }
+
+        if self.state != State::Started {
+            return Err(Error::General("End cannot be called twice".to_string()));
+        }
         // compute file stats
         let num_rows = self.row_groups.iter().map(|group| group.num_rows).sum();
 
+        if self.options.write_statistics {
+            // write column indexes (require page statistics)
+            for (group, pages) in self.row_groups.iter_mut().zip(self.page_specs.iter()) {
+                for (column, pages) in group.columns.iter_mut().zip(pages.iter()) {
+                    let offset = self.offset;
+                    column.column_index_offset = Some(offset as i64);
+                    self.offset += write_column_index_async(&mut self.writer, pages).await?;
+                    let length = self.offset - offset;
+                    column.column_index_length = Some(length as i32);
+                }
+            }
+        };
+
+        // write offset index
+        for (group, pages) in self.row_groups.iter_mut().zip(self.page_specs.iter()) {
+            for (column, pages) in group.columns.iter_mut().zip(pages.iter()) {
+                let offset = self.offset;
+                column.offset_index_offset = Some(offset as i64);
+                self.offset += write_offset_index_async(&mut self.writer, pages).await?;
+                column.offset_index_length = Some((self.offset - offset) as i32);
+            }
+        }
+
         let metadata = FileMetaData::new(
             self.options.version.into(),
-            self.schema.into_thrift(),
+            self.schema.clone().into_thrift(),
             num_rows,
-            self.row_groups,
+            self.row_groups.clone(),
             key_value_metadata,
-            self.created_by,
+            self.created_by.clone(),
             None,
             None,
             None,
         );
 
         let len = end_file(&mut self.writer, metadata).await?;
-        Ok((self.offset + len, self.writer))
+        Ok(self.offset + len)
+    }
+
+    /// Returns the underlying writer.
+    pub fn into_inner(self) -> W {
+        self.writer
     }
 }

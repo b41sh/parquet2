@@ -22,6 +22,7 @@ pub use parquet_format_async_temp::FileMetaData;
 pub use streaming_decompression::fallible_streaming_iterator;
 pub use streaming_decompression::FallibleStreamingIterator;
 
+const HEADER_SIZE: u64 = PARQUET_MAGIC.len() as u64;
 const FOOTER_SIZE: u64 = 8;
 const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
 
